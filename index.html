@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Araba Sürme Oyunu</title>
+<style>
+body{margin:0;background:#111;color:#fff;font-family:Arial;display:flex;flex-direction:column;align-items:center}
+#game{background:#222;touch-action:none;border:4px solid #000;border-radius:10px;margin-top:10px}
+.btn{padding:8px 14px;background:#333;color:#fff;border:1px solid #555;border-radius:6px;cursor:pointer;margin:4px}
+.touch{position:absolute;bottom:10px;right:10px;display:flex;gap:6px;flex-direction:column}
+.touch div{width:60px;height:60px;background:rgba(0,0,0,0.4);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:24px;user-select:none}
+</style>
+</head>
+<body>
+
+<button class="btn" id="startBtn">Başla</button>
+<canvas id="game" width="360" height="640"></canvas>
+
+<div class="touch">
+  <div id="left">◀</div>
+  <div id="right">▶</div>
+  <div id="accel">▲</div>
+  <div id="brake">▼</div>
+</div>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+let running=false;
+
+// Player
+const player={x:160,y:520,w:40,h:70,speed:0,max:8};
+
+// Traffic
+let cars=[];
+let frames=0;
+
+// Special sticker car color
+const specialColor="#050505";
+
+// Input
+const touch={left:false,right:false,accel:false,brake:false};
+["left","right","accel","brake"].forEach(id=>{
+  const el=document.getElementById(id);
+  el.addEventListener("pointerdown",e=>{e.preventDefault();touch[id]=true;});
+  el.addEventListener("pointerup",e=>{touch[id]=false;});
+  el.addEventListener("contextmenu",e=>e.preventDefault());
+});
+
+// Road animation
+let roadOffset=0;
+
+document.getElementById("startBtn").onclick=()=>{running=true;cars=[];player.speed=0;frames=0;loop();};
+
+function spawnCar(){
+  const lane=[70,160,250][Math.floor(Math.random()*3)];
+  const isSpecial=Math.random()<0.20;
+  cars.push({
+    x:lane,
+    y:-100,
+    w:40,
+    h:70,
+    speed:3+Math.random()*2,
+    special:isSpecial
+  });
+}
+
+function drawSticker(car){
+  const w=car.w*0.75,h=16;
+  const x=car.x+(car.w-w)/2;
+  const y=car.y+car.h*0.35;
+  ctx.fillStyle="#E50914";
+  round(x,y,w,h,4,true);
+  ctx.fillStyle="#fff";
+  ctx.font="12px sans-serif";
+  ctx.textAlign="center";
+  ctx.fillText("YT: @MTechnoW",x+w/2,y+h-4);
+}
+
+function update(){
+  if(touch.left && player.x>50) player.x-=4;
+  if(touch.right && player.x<270) player.x+=4;
+  if(touch.accel) player.speed=Math.min(player.max,player.speed+0.2);
+  else player.speed=Math.max(0,player.speed-0.1);
+  if(touch.brake) player.speed=Math.max(0,player.speed-0.3);
+
+  roadOffset+=player.speed*1.5;
+  if(roadOffset>40) roadOffset=0;
+
+  frames++;
+  if(frames%60===0) spawnCar();
+
+  cars.forEach(c=>c.y+=c.speed+player.speed);
+
+  cars=cars.filter(c=>c.y<700);
+}
+
+function collide(a,b){
+  return !(a.x+a.w<b.x||a.x>b.x+b.w||a.y+a.h<b.y||a.y>b.y+b.h);
+}
+
+function render(){
+  ctx.fillStyle="#333";
+  ctx.fillRect(0,0,360,640);
+
+  ctx.strokeStyle="#fff";
+  ctx.lineWidth=4;
+  ctx.setLineDash([20,20]);
+  for(let i=0;i<3;i++){
+    const x=[110,200][i-1];
+  }
+  ctx.beginPath();
+  ctx.setLineDash([20,20]);
+  ctx.moveTo(120, -roadOffset);
+  ctx.lineTo(120, 700);
+  ctx.moveTo(240, -roadOffset);
+  ctx.lineTo(240, 700);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle="#1ec5ff";
+  round(player.x,player.y,player.w,player.h,6,true);
+
+  cars.forEach(c=>{
+    ctx.fillStyle=c.special?specialColor:"#ff6b6b";
+    round(c.x,c.y,c.w,c.h,6,true);
+    if(c.special) drawSticker(c);
+    if(collide(player,c)) running=false;
+  });
+}
+
+function loop(){
+  if(!running) return;
+  update();
+  render();
+  requestAnimationFrame(loop);
+}
+
+function round(x,y,w,h,r,fill){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  if(fill) ctx.fill();
+}
+</script>
+</body>
+</html>
