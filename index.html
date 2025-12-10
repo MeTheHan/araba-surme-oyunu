@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Basit Araba Sürme Oyunu</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+html,body{height:100%;margin:0;background:#111;color:#fff;display:flex;align-items:center;justify-content:center;}
+.container{width:100%;max-width:900px;padding:16px;box-sizing:border-box;}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+h1{font-size:18px;margin:0;}
+.controls-row{display:flex;gap:8px;align-items:center;}
+.btn{background:#1e1e1e;border:1px solid #333;padding:8px 10px;border-radius:6px;color:#fff;cursor:pointer;}
+.canvas-wrap{position:relative;border-radius:12px;overflow:hidden;border:6px solid #222;background:linear-gradient(#333,#111);}
+canvas{display:block;width:100%;height:auto;background:#222;touch-action:none;}
+.hud{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.3);backdrop-filter:blur(4px);padding:8px;border-radius:8px;font-size:14px;}
+.hud .score{font-weight:700;font-size:16px;}
+.overlay-controls{position:absolute;right:8px;bottom:8px;display:flex;gap:8px;flex-direction:column;}
+.touch-row{display:flex;gap:8px;}
+.touch-btn{width:64px;height:64px;border-radius:12px;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;border:2px solid rgba(255,255,255,0.06);font-size:22px;user-select:none;}
+.footer{margin-top:8px;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#ddd;}
+.leaderboard{background:#0f0f0f;padding:8px;border-radius:8px;border:1px solid #222;min-width:160px;}
+small{color:#aaa;}
+.instructions{margin-top:8px;color:#ccc;font-size:13px;}
+.badge{background:#0a84ff;padding:4px 8px;border-radius:999px;font-size:12px;color:#fff;}
+@media (max-width:520px){
+  .touch-row{gap:6px;}
+  .touch-btn{width:56px;height:56px;font-size:20px;}
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Araba Sürme Oyunu</h1>
+    <div class="controls-row">
+      <button class="btn" id="startBtn">Başla</button>
+      <button class="btn" id="resetBtn">Sıfırla</button>
+      <div class="badge" id="bestLabel">En İyi: 0</div>
+    </div>
+  </header>
+  <div class="canvas-wrap" id="wrap">
+    <canvas id="game"></canvas>
+    <div class="hud" id="hud">
+      <div>Skor: <span class="score" id="score">0</span></div>
+      <div>Hız: <span id="speed">0</span></div>
+    </div>
+    <div class="overlay-controls" id="overlay">
+      <div class="touch-row">
+        <div class="touch-btn" id="btnLeft">◀</div>
+        <div class="touch-btn" id="btnRight">▶</div>
+      </div>
+      <div class="touch-row">
+        <div class="touch-btn" id="btnAccel">▲</div>
+        <div class="touch-btn" id="btnBrake">▼</div>
+      </div>
+    </div>
+  </div>
+  <div class="footer">
+    <div class="leaderboard" id="leaderboard">
+      <strong>Skorlar</strong>
+      <div id="scoresList"><small>Henüz skor yok.</small></div>
+    </div>
+    <div>
+      <small>Kontroller: Ok tuşları / A/D / Dokunmatik düğmeler</small>
+      <div class="instructions">Mobil için dokunmatik kontroller açık. Oyunu başlatmak için <strong>Başla</strong>ya bas.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Basit ama dikkatli yapılmış HTML5 canvas araba oyunu.
+   - Mobil dokunmatik desteği (düğmeler)
+   - Klavye kontrolleri: Sol/Sağ/A/D, Yukarı hız, Aşağı fren
+   - Yerel depolamada basit skor tablosu
+   - AI trafik arabaları, çarpışma algılama
+*/
+(() => {
+  const canvas = document.getElementById('game');
+  const wrap = document.getElementById('wrap');
+  const ctx = canvas.getContext('2d');
+  let W, H, scale;
+
+  function resizeCanvas(){
+    const rect = wrap.getBoundingClientRect();
+    W = Math.floor(Math.min(900, rect.width));
+    H = Math.floor(Math.max(500, Math.min(900, rect.height)));
+    canvas.width = W * devicePixelRatio;
+    canvas.height = H * devicePixelRatio;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // Game state
+  let running = false;
+  let scoreEl = document.getElementById('score');
+  let speedEl = document.getElementById('speed');
+  let startBtn = document.getElementById('startBtn');
+  let resetBtn = document.getElementById('resetBtn');
+  let bestLabel = document.getElementById('bestLabel');
+  let scoresList = document.getElementById('scoresList');
+
+  // Player car
+  const player = {
+    x: 0, y: 0, w: 42, h: 70, lane: 1,
+    speed: 0, maxSpeed: 8, accel: 0.25, friction: 0.06,
+    color: '#1ec5ff'
+  };
+
+  // Road
+  const lanes = 3;
+  function laneX(i){ return (W/2) - (160/2) + (i * (160/(lanes-1))); }
+
+  // Traffic
+  let traffic = [];
+  let spawnTimer = 0;
+  let baseSpawnInterval = 90; // frames
+
+  // Score/time
+  let frames = 0;
+  let score = 0;
+
+  // Controls
+  const keys = {};
+  const touch = { left:false, right:false, accel:false, brake:false };
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if(['arrowleft','arrowright','arrowup','arrowdown','a','d','w','s'].includes(e.key.toLowerCase())) e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  // Touch buttons
+  ['btnLeft','btnRight','btnAccel','btnBrake'].forEach(id => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('pointerdown', e => { e.preventDefault(); el.setPointerCapture(e.pointerId); touchToggle(id, true); });
+    el.addEventListener('pointerup', e => { e.preventDefault(); try{el.releasePointerCapture(e.pointerId)}catch(_){}; touchToggle(id, false); });
+    el.addEventListener('pointerleave', e => { touchToggle(id, false); });
+  });
+  function touchToggle(id, v){
+    if(id==='btnLeft') touch.left=v;
+    if(id==='btnRight') touch.right=v;
+    if(id==='btnAccel') touch.accel=v;
+    if(id==='btnBrake') touch.brake=v;
+  }
+
+  // LocalStorage leaderboard
+  function loadScores(){ try { return JSON.parse(localStorage.getItem('car_scores')||'[]'); } catch(e){return[]} }
+  function saveScore(s){
+    const arr = loadScores();
+    arr.push({score:s, date: new Date().toISOString()});
+    arr.sort((a,b)=>b.score-a.score);
+    localStorage.setItem('car_scores', JSON.stringify(arr.slice(0,10)));
+    renderScores();
+  }
+  function renderScores(){
+    const arr = loadScores();
+    if(arr.length===0){ scoresList.innerHTML = '<small>Henüz skor yok.</small>'; bestLabel.textContent = 'En İyi: 0'; return; }
+    bestLabel.textContent = 'En İyi: ' + arr[0].score;
+    scoresList.innerHTML = arr.map(a=>`<div>${a.score} <small>(${new Date(a.date).toLocaleString()})</small></div>`).join('');
+  }
+  renderScores();
+
+  // Start/reset
+  startBtn.addEventListener('click', ()=>{ if(!running) start(); });
+  resetBtn.addEventListener('click', ()=>{ resetAll(); });
+
+  function resetAll(){
+    running = false;
+    traffic = [];
+    frames = 0; score = 0; updateHUD();
+    player.lane = 1;
+    player.x = laneX(player.lane) - player.w/2;
+    player.y = H - player.h - 30;
+    player.speed = 0;
+    spawnTimer = 0;
+    render(); // draw initial
+  }
+
+  function start(){
+    resetAll();
+    running = true;
+    loop();
+  }
+
+  // Simple AI car factory
+  function spawnTraffic(){
+    const lane = Math.floor(Math.random()*lanes);
+    const speed = 2 + Math.random()*3 + Math.min(0.002*score, 3); // scale with score
+    const width = 40 + Math.random()*20;
+    const height = 70;
+    const x = laneX(lane) - width/2;
+    traffic.push({x,y:-height - Math.random()*200,w:width,h:height,lane,speed,color:'#ff6b6b'});
+  }
+
+  // Collision detection AABB
+  function collide(a,b){
+    return !(a.x + a.w < b.x || a.x > b.x + b.w || a.y + a.h < b.y || a.y > b.y + b.h);
+  }
+
+  // Main loop
+  function loop(){
+    if(!running) return;
+    update();
+    render();
+    frames++;
+    requestAnimationFrame(loop);
+  }
+
+  function updateHUD(){ scoreEl.textContent = Math.floor(score); speedEl.textContent = player.speed.toFixed(1); }
+
+  function update(){
+    // Controls input (keyboard + touch)
+    const leftPressed = keys['arrowleft'] || keys['a'] || keys['q'] || touch.left;
+    const rightPressed = keys['arrowright'] || keys['d'] || keys['e'] || touch.right;
+    const upPressed = keys['arrowup'] || keys['w'] || touch.accel;
+    const downPressed = keys['arrowdown'] || keys['s'] || touch.brake;
+
+    // Horizontal lane movement: smooth lane shifting
+    if(leftPressed && player.lane > 0) player.lane -= 0.05;
+    if(rightPressed && player.lane < lanes-1) player.lane += 0.05;
+    // clamp lane index then map to x
+    player.lane = Math.max(0, Math.min(lanes-1, player.lane));
+    const targetX = laneX(Math.round(player.lane)) - player.w/2;
+    player.x += (targetX - player.x) * 0.2;
+
+    // Speed
+    if(upPressed) player.speed = Math.min(player.maxSpeed, player.speed + player.accel);
+    else if(downPressed) player.speed = Math.max(0, player.speed - player.accel*1.4);
+    else player.speed = Math.max(0, player.speed - player.friction);
+
+    // Move traffic down (relative to player's forward movement)
+    for(let t of traffic){
+      t.y += (t.speed + (player.speed*0.6));
+    }
+
+    // Remove off-screen traffic
+    traffic = traffic.filter(t => t.y < H + 200);
+
+    // Spawn logic
+    spawnTimer++;
+    const dynamicInterval = Math.max(30, baseSpawnInterval - Math.floor(score/20)); // faster over time
+    if(spawnTimer > dynamicInterval){
+      spawnTimer = 0;
+      spawnTraffic();
+    }
+
+    // Update score (distance travelled)
+    score += player.speed * 0.18;
+    updateHUD();
+
+    // Check collisions
+    const playerBox = {x: player.x, y: player.y, w: player.w, h: player.h};
+    for(let t of traffic){
+      const tBox = {x: t.x, y: t.y, w: t.w, h: t.h};
+      if(collide(playerBox, tBox)){
+        // collision -> stop game
+        running = false;
+        saveScore(Math.floor(score));
+        showCollision();
+        break;
+      }
+    }
+  }
+
+  function showCollision(){
+    // Simple flash and game over
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#fff';
+    ctx.font = '28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Çarpışma! Oyun bitti', W/2, H/2 - 10);
+    ctx.font = '16px sans-serif';
+    ctx.fillText('Skor: ' + Math.floor(score), W/2, H/2 + 20);
+    ctx.fillText('Tekrar başlatmak için "Başla" butonuna bas', W/2, H/2 + 48);
+  }
+
+  // Draw function
+  function render(){
+    // background road
+    ctx.clearRect(0,0,W,H);
+    // road area
+    const roadW = 480;
+    const roadX = (W - roadW)/2;
+    // pavement
+    ctx.fillStyle = '#0b0b0b';
+    ctx.fillRect(roadX - 50, 0, roadW + 100, H);
+    // road
+    ctx.fillStyle = '#2b2b2b';
+    ctx.fillRect(roadX, 0, roadW, H);
+    // lane lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 6;
+    ctx.setLineDash([30,20]);
+    for(let i=1;i<lanes;i++){
+      const lx = roadX + (roadW/lanes)*i;
+      ctx.beginPath();
+      ctx.moveTo(lx, - (frames* (player.speed*0.6)) % 50);
+      ctx.lineTo(lx, H);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Player car
+    player.y = H - player.h - 28;
+    ctx.fillStyle = player.color;
+    roundRect(ctx, player.x, player.y, player.w, player.h, 8, true, false);
+    // windshield
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(player.x+8, player.y+8, player.w-16, 18);
+
+    // traffic cars
+    for(let t of traffic){
+      ctx.fillStyle = t.color;
+      roundRect(ctx, t.x, t.y, t.w, t.h, 6, true, false);
+      // headlights (bottom of traffic)
+      ctx.fillStyle = 'rgba(255,255,200,0.12)';
+      ctx.fillRect(t.x + 6, t.y + t.h - 10, t.w - 12, 6);
+    }
+
+    // HUD is separate; already updated
+  }
+
+  function roundRect(ctx,x,y,w,h,r,fill,stroke){
+    if (typeof r === 'undefined') r = 5;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    if(fill) ctx.fill();
+    if(stroke) ctx.stroke();
+  }
+
+  // initial placement & draw
+  player.x = laneX(player.lane) - player.w/2;
+  player.y = H - player.h - 30;
+  render();
+
+  // allow tap canvas to toggle pause
+  canvas.addEventListener('click', ()=>{ if(running){ running=false; } else { start(); } });
+
+  // expose for debugging
+  window._game = { start, resetAll, traffic, player };
+
+  // auto start on load for convenience on desktop
+  // (but mobile users should press Başla because of autoplay restrictions)
+  if(window.innerWidth > 700) setTimeout(() => start(), 350);
+})();
+</script>
+</body>
+</html>
+"""
+
+path = "/mnt/data/car_game.html"
+with open(path, "w", encoding="utf-8") as f:
+    f.write(html)
+
+path
+
